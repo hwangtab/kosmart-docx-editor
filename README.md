@@ -32,6 +32,28 @@ claude mcp add -s global kosmart_docx_editor $(pwd)/venv/bin/python $(pwd)/serve
 
 ---
 
+### 🧑‍🚀 2. 나는 'Antigravity (구글 딥마인드 AI)' 를 쓰고 있다면?
+
+Antigravity는 시스템 내부 설정 파일(`mcp_config.json`)을 열어 코드를 한 블럭 넣어주면 됩니다.
+1. 위 Claude Code 설치 안내의 **1~3번 명령어까지 똑같이 터미널에 복사**해서 설치를 마칩니다.
+2. 터미널에 `nano ~/.gemini/antigravity/mcp_config.json` 을 입력하여 설정 파일을 엽니다. (없으면 새로 빈 내용을 만듭니다)
+3. 아래의 JSON 코드를 문서 안에 붙여넣습니다. `내사용자이름` 은 본인의 맥북 계정명으로 변경해주세요.
+   ```json
+   {
+     "mcpServers": {
+       "kosmart_docx_editor": {
+         "command": "/Users/내사용자이름/.../kosmart-docx-editor/venv/bin/python",
+         "args": [
+           "/Users/내사용자이름/.../kosmart-docx-editor/server.py"
+         ]
+       }
+     }
+   }
+   ```
+4. `Ctrl + O`, `Enter`를 눌러 저장하고 `Ctrl + X`로 빠져나옵니다. 설치 끝!
+
+---
+
 ### 🟢 2. 나는 'Cursor(커서)'나 'VS Code IDE'를 쓰고 있다면?
 
 먼저, 방금 전 1번 안내에 있는 **1, 2, 3번 명령어까지만 똑같이 터미널에 복사해서 실행(설치)**해주세요.
