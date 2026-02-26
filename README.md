@@ -1,38 +1,61 @@
-# kosmart-docx-editor (MCP Server)
+# 🪄 마법의 AI 워드 표 편집기 (DOCX MCP Server)
 
-A custom Model Context Protocol (MCP) server designed to perfectly read and edit Microsoft Word `(.docx)` files, specifically engineered to bypass the infamous merged cells (infinite loop/index error) bug in `python-docx` using a Flat Index algorithm.
+안녕하세요! 이 도구는 한국스마트협동조합 실무를 위해 특수 제작된 **DOCX(워드/한글 변환 문서) 전용 AI 플러그인(MCP)** 입니다. 
 
-## Features
-- **`read_docx_table_flat_index`**: Scans any complex `.docx` table mapping all unique cells into a flat 1D array, preventing duplicate grid representations.
-- **`safe_replace_docx_cell`**: Replaces the text inside a targeted `.docx` cell without destroying the underlying XML paragraph formatting.
+평소에 AI(클로드, 커서 등)에게 "이 워드 제안서 안의 표 금액을 10만원으로 고쳐줘"라고 시키면, AI가 엉뚱한 코드를 짜서 무한루프(로딩)에 빠지거나 문서 파일을 통째로 깨뜨리는 경험을 해보셨나요? 
 
-## Installation for AI Agents (Claude / Cursor)
+이제 이 툴박스를 **복사+붙여넣기 한 번**으로 내 AI에 꽂아주기만 하면, 아무리 복잡하게 **병합된 셀(Merged Cells)**이 섞여 있는 악랄한 표라도 AI가 단 1초 만에 깔끔하게 읽고, 워드 줄 간격과 폰트 서식을 1mm도 망가뜨리지 않고 빈칸만 쏙쏙 덮어써 줍니다! 😎
 
-### Prerequisites
-Make sure you have Python 3.10+ installed on your system.
+---
 
-### Option 1: Claude Code (CLI)
-You can directly add this MCP server to your Claude Code environment using the following command:
+## 🚀 딱 1분 만에 내 AI에 장착하기 (설치 방법)
+
+파이썬을 전혀 몰라도 괜찮습니다! 터미널(까만 화면)을 열어 아래 **설치 마법사 명령어**를 그냥 복붙하고 엔터만 치세요.
+
+### 🤖 1. 나는 (터미널에서 쓰는) 'Claude Code'를 쓰고 있다면?
+아래 코드 네 줄을 순서대로 터미널에 한 줄씩 복사해서 붙여넣고 엔터를 치세요.
 
 ```bash
+# 1. 파일 다운로드 받기
 git clone https://github.com/hwangtab/kosmart-docx-editor.git
-cd kosmart-docx-editor
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
 
-# Add globally to Claude
+# 2. 다운받은 폴더로 쏙 들어가기
+cd kosmart-docx-editor
+
+# 3. 도구(파이썬 가상환경) 자동 설치하기
+python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
+
+# 4. 내 클로드 엔진에 이 마법도구 영구적으로 박아넣기 (끝!)
 claude mcp add -s global kosmart_docx_editor $(pwd)/venv/bin/python $(pwd)/server.py
 ```
+> 🎉 **성공!** 이제 아무 폴더에서나 `claude`를 켜고 "이 워드 문서 표 제일 마지막 칸을 이걸로 바꿔주라"하면 알아서 다 해줍니다!
 
-### Option 2: Cursor / VSCode
-1. Git clone this repository and install dependencies in a virtual environment as shown above.
-2. In Cursor/VSCode MCP settings, add a new command tool:
-   - **Name**: `kosmart_docx_editor`
-   - **Command**: `/path/to/venv/bin/python /path/to/server.py`
+---
 
-## Why This Exists?
-`python-docx` struggles with MS Word tables that contain merged cells, returning duplicate cell objects based on the layout grid rather than the unique cell structure. This often leads AI agents to infinite loops or `IndexError` when creating formatting replacement pipelines. This MCP server acts as an ultimate workaround.
+### 🟢 2. 나는 'Cursor(커서)'나 'VS Code IDE'를 쓰고 있다면?
 
-## License
-MIT License
+먼저, 방금 전 1번 안내에 있는 **1, 2, 3번 명령어까지만 똑같이 터미널에 복사해서 실행(설치)**해주세요.
+
+그 다음, 에디터 설정 창을 열어서 도구를 연결해 주어야 합니다.
+1. Cursor 에디터를 열고 **설정(Settings)** 창 열기
+2. 왼쪽 메뉴에서 **Features -> MCP** 메뉴 클릭
+3. **[+ Add New MCP Server]** 버튼 꾹 누르기
+4. 칸을 요렇게 채워주세요.
+   * **Name**: 마음대로! (예: `마법의워드수정기`)
+   * **Type**: `command` 선택
+   * **Command**: (아래 명령어를 주의해서 복붙해주세요. 단, 경로상의 `내사용자이름`을 꼭 본인의 맥 이름으로 바꿔주세요!)
+     ```bash
+     /Users/내사용자이름/.../kosmart-docx-editor/venv/bin/python /Users/내사용자이름/.../kosmart-docx-editor/server.py
+     ```
+5. 저장 후 초록색 불(🟢)이 들어오면 성공!
+
+---
+
+## 🛠 어떤 무기들이 들어있나요?
+
+AI가 위 설치 과정을 마치면, 스스로 알아서 아래의 2가지 마법 스킬을 쓸 수 있게 됩니다.
+* **`read_docx_table_flat_index` (워드 투시경)**: 아무리 복잡한 표라도 눈에 보이는 네모 칸(Cell) 개수대로 순서를 매겨서 깔끔하게 글자를 읽어줍니다. 엑셀 지옥의 '병합된 셀' 에러 걱정 끝!
+* **`safe_replace_docx_cell` (안전 덮어쓰기)**: 워드 안에 숨어있는 보이지 않는 태그(XML 부모 자식) 서식을 보존하면서 내용물 텍스트만 진짜 사람처럼 안전하게 손상 없이 덮어써 줍니다.
+
+---
+**License**: 자유롭게 복사하고 회사에서 마구마구 동네방네 퍼트려 써주세요! (MIT License)
