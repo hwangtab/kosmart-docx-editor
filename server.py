@@ -6,6 +6,7 @@ import zipfile
 import lxml.etree as ET
 import os
 import copy
+import shutil
 # Create an MCP server
 mcp = FastMCP("docx_editor")
 
@@ -38,26 +39,33 @@ def safe_replace_text_internal(cell, new_text):
 def replace_keyword_in_paragraphs(paragraphs, old_text, new_text):
     """
     Replaces old_text with new_text in paragraphs.
-    If the old_text spans multiple runs, we replace the first run's text
-    and clear subsequent runs containing the rest of the text, falling back
-    to simple replacement if finding precise run splits is too complex.
-    For simplicity and safety, we find the run containing the old_text or
-    replace at the paragraph level if split across runs, though paragraph-level
-    replacement loses intra-run formatting. A better approach finds which run
-    contains the old_text.
+    Handles regular runs and text nested inside hyperlinks.
     """
     replaced_count = 0
+    namespaces = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+    
     for p in paragraphs:
         if old_text in p.text:
-            # Simple approach: find runs that perfectly contain the word
+            found = False
+            # Check API runs
             for run in p.runs:
                 if old_text in run.text:
                     run.text = run.text.replace(old_text, new_text)
-                    replaced_count += 1
+                    found = True
+                    
+            # Check XML for hyperlinks, which python-docx API might hide
+            for hl in p._p.findall('.//w:hyperlink', namespaces):
+                for t in hl.findall('.//w:t', namespaces):
+                    if t.text and old_text in t.text:
+                        t.text = t.text.replace(old_text, new_text)
+                        found = True
+                        
+            if found:
+                replaced_count += 1
+                
             # If paragraph has the text but no single run has it (it's split),
             # we do a fallback paragraph-level replace, preserving first run's formatting if possible.
-            # (In a fully robust system we'd merge runs, but this is a safer basic fallback)
-            if old_text in p.text and replaced_count == 0:
+            if old_text in p.text and not found:
                 p.text = p.text.replace(old_text, new_text)
                 replaced_count += 1
     return replaced_count
@@ -172,10 +180,92 @@ def safe_replace_docx_text_keyword(file_path: str, old_text: str, new_text: str,
                 for cell in row.cells:
                     total_replacements += replace_keyword_in_paragraphs(cell.paragraphs, old_text, new_text)
                     
+        # 3. Replace in Headers and Footers
+        for section in doc.sections:
+            for h_f in [section.header, section.footer]:
+                if h_f and not h_f.is_linked_to_previous:
+                    total_replacements += replace_keyword_in_paragraphs(h_f.paragraphs, old_text, new_text)
+                    for table in h_f.tables:
+                        for row in table.rows:
+                            for cell in row.cells:
+                                total_replacements += replace_keyword_in_paragraphs(cell.paragraphs, old_text, new_text)
+                                
         doc.save(out_path)
         return f"Successfully replaced '{old_text}' with '{new_text}' in {total_replacements} paragraph(s).\nSaved to: {out_path}"
     except Exception as e:
         return f"Error replacing text: {str(e)}"
+
+@mcp.tool()
+def safe_replace_text_box_keyword(file_path: str, old_text: str, new_text: str, out_path: str = "") -> str:
+    """
+    Directly hacks the Word document's XML to replace text hidden inside Floating Shapes and Text Boxes.
+    This bypasses the limitations of the standard python-docx API.
+    
+    Args:
+        file_path: The absolute path to the .docx file
+        old_text: The exact string to search for inside text boxes
+        new_text: The string to replace it with
+        out_path: Optional save path. If empty, overwrites the original file_path.
+        
+    Returns:
+        Status message about the operation.
+    """
+    if not os.path.exists(file_path):
+        return f"Error: File '{file_path}' not found."
+        
+    if not out_path:
+        out_path = file_path
+        
+    temp_path = file_path + ".tmp.zip"
+    total_replacements = 0
+    
+    try:
+        with zipfile.ZipFile(file_path, 'r') as zin, zipfile.ZipFile(temp_path, 'w') as zout:
+            for item in zin.infolist():
+                with zin.open(item) as f:
+                    content = f.read()
+                
+                # Check if it's an XML file that might contain text boxes (document, headers, footers)
+                if item.filename.endswith('.xml') and item.filename.startswith('word/'):
+                    try:
+                        tree = ET.fromstring(content)
+                        namespaces = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+                        vml_namespaces = {'v': 'urn:schemas-microsoft-com:vml'}
+                        changed = False
+                        
+                        # Find all w:t inside w:txbxContent or v:textbox
+                        txbxs = tree.findall('.//w:txbxContent', namespaces)
+                        try:
+                            txbxs.extend(tree.findall('.//v:textbox', vml_namespaces))
+                        except Exception:
+                            pass
+                            
+                        for txbx in txbxs:
+                            for t in txbx.findall('.//w:t', namespaces):
+                                if t.text and old_text in t.text:
+                                    t.text = t.text.replace(old_text, new_text)
+                                    total_replacements += 1
+                                    changed = True
+                        
+                        if changed:
+                            content = ET.tostring(tree, encoding='utf-8', xml_declaration=True)
+                    except Exception:
+                        pass # if it's not well-formed XML or we can't parse it, just copy as is
+                zout.writestr(item, content)
+                
+        if total_replacements > 0:
+            shutil.move(temp_path, out_path)
+            return f"Successfully replaced '{old_text}' with '{new_text}' in {total_replacements} text box segments.\\nSaved to: {out_path}"
+        else:
+            os.remove(temp_path)
+            if out_path != file_path:
+                shutil.copy2(file_path, out_path)
+            return "No matching text found inside text boxes."
+            
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return f"Error replacing text box content: {str(e)}"
 
 @mcp.tool()
 def list_docx_images(file_path: str) -> str:
