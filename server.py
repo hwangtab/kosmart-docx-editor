@@ -38,36 +38,57 @@ def safe_replace_text_internal(cell, new_text):
 
 def replace_keyword_in_paragraphs(paragraphs, old_text, new_text):
     """
-    Replaces old_text with new_text in paragraphs.
-    Handles regular runs and text nested inside hyperlinks.
+    Replaces old_text with new_text in paragraphs while strictly preserving formatting.
+    Uses a run-merging fallback for split words and handles nested hyperlinks.
     """
     replaced_count = 0
     namespaces = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
     
     for p in paragraphs:
-        if old_text in p.text:
-            found = False
-            # Check API runs
-            for run in p.runs:
-                if old_text in run.text:
-                    run.text = run.text.replace(old_text, new_text)
+        if old_text not in p.text:
+            continue
+            
+        found = False
+        
+        # 1. Check API runs (perfect match within a single run)
+        for run in p.runs:
+            if old_text in run.text:
+                run.text = run.text.replace(old_text, new_text)
+                found = True
+                
+        # 2. Check XML for hyperlinks, which python-docx API might hide
+        for hl in p._p.findall('.//w:hyperlink', namespaces):
+            for t in hl.findall('.//w:t', namespaces):
+                if t.text and old_text in t.text:
+                    t.text = t.text.replace(old_text, new_text)
                     found = True
                     
-            # Check XML for hyperlinks, which python-docx API might hide
-            for hl in p._p.findall('.//w:hyperlink', namespaces):
-                for t in hl.findall('.//w:t', namespaces):
-                    if t.text and old_text in t.text:
-                        t.text = t.text.replace(old_text, new_text)
-                        found = True
-                        
-            if found:
-                replaced_count += 1
+        # 3. Fallback: The text exists in the paragraph, but is split across multiple runs/hyperlinks.
+        # We find the sequence of runs that make up the text and replace it, keeping the first run's formatting.
+        if not found:
+            # We collect all distinct w:t elements in the paragraph XML
+            t_elements = p._p.findall('.//w:t', namespaces)
+            if t_elements:
+                full_text = ""
+                for t in t_elements:
+                    full_text += (t.text or "")
                 
-            # If paragraph has the text but no single run has it (it's split),
-            # we do a fallback paragraph-level replace, preserving first run's formatting if possible.
-            if old_text in p.text and not found:
-                p.text = p.text.replace(old_text, new_text)
-                replaced_count += 1
+                if old_text in full_text:
+                    # Replace the text in the full string
+                    new_full = full_text.replace(old_text, new_text)
+                    
+                    # Dump everything into the first w:t element to preserve its formatting
+                    t_elements[0].text = new_full
+                    
+                    # Clear out the text from all subsequent w:t elements
+                    for i in range(1, len(t_elements)):
+                        t_elements[i].text = ""
+                        
+                    found = True
+                    
+        if found:
+            replaced_count += 1
+            
     return replaced_count
 
 @mcp.tool()
@@ -241,11 +262,23 @@ def safe_replace_text_box_keyword(file_path: str, old_text: str, new_text: str, 
                             pass
                             
                         for txbx in txbxs:
-                            for t in txbx.findall('.//w:t', namespaces):
-                                if t.text and old_text in t.text:
-                                    t.text = t.text.replace(old_text, new_text)
-                                    total_replacements += 1
-                                    changed = True
+                            # Extract all text from this text box
+                            t_elements = txbx.findall('.//w:t', namespaces)
+                            if not t_elements:
+                                continue
+                                
+                            full_text = ""
+                            for t in t_elements:
+                                full_text += (t.text or "")
+                                
+                            if old_text in full_text:
+                                new_full = full_text.replace(old_text, new_text)
+                                # Dump into first t element, clear others
+                                t_elements[0].text = new_full
+                                for i in range(1, len(t_elements)):
+                                    t_elements[i].text = ""
+                                total_replacements += 1
+                                changed = True
                         
                         if changed:
                             content = ET.tostring(tree, encoding='utf-8', xml_declaration=True)
@@ -403,23 +436,21 @@ def append_docx_list_item(file_path: str, target_text: str, new_item_text: str, 
         if not target_paragraph:
             return f"Error: Could not find any paragraph containing '{target_text}'."
 
-        # Insert a new paragraph before the target's XML element, then swap them conceptually
-        # or just insert after by accessing the parent element.
-        new_p = doc.add_paragraph(new_item_text)
+        # Instead of adding a paragraph to the end of the document, we create a new OxmlElement
+        # and insert it directly into the XML tree right after our target paragraph's XML.
+        # This prevents breaking logical boundaries if the target is inside a table cell.
+        from docx.text.paragraph import Paragraph
         
-        # Move the newly added paragraph right after the target paragraph
-        target_paragraph._p.addnext(new_p._p)
+        new_p_element = OxmlElement('w:p')
+        target_paragraph._p.addnext(new_p_element)
+        new_p = Paragraph(new_p_element, target_paragraph._parent)
+        new_p.text = new_item_text
         
         # Clone paragraph properties (pPr) which contain the numbering info AND style
         if target_paragraph._p.pPr is not None:
             # Create a deep copy of the pPr element
             pPr_clone = copy.deepcopy(target_paragraph._p.pPr)
-            
-            # If the new paragraph already has pPr, replace it, otherwise insert it
-            if new_p._p.pPr is not None:
-                new_p._p.replace(new_p._p.pPr, pPr_clone)
-            else:
-                new_p._p.insert(0, pPr_clone)
+            new_p._p.insert(0, pPr_clone)
                 
         # If the original paragraph has a specific style applied, apply it
         new_p.style = target_paragraph.style
@@ -469,10 +500,16 @@ def read_docx_table_optimized(file_path: str, table_index: int = -1) -> str:
         for row in target_table.findall('.//w:tr', namespaces):
             # Iterate over cells
             for cell in row.findall('.//w:tc', namespaces):
-                # Extract all text nodes within the cell and join them
-                texts = [t.text for t in cell.findall('.//w:t', namespaces) if t.text]
-                if texts:
-                    cell_text = "".join(texts).strip()
+                # We extract text per paragraph (w:p) inside the cell
+                paragraph_texts = []
+                for p in cell.findall('.//w:p', namespaces):
+                    texts = [t.text for t in p.findall('.//w:t', namespaces) if t.text]
+                    if texts:
+                        paragraph_texts.append("".join(texts).strip())
+                
+                if paragraph_texts:
+                    # Join paragraphs with newline to preserve formatting
+                    cell_text = "\\n".join(paragraph_texts)
                     results.append(f"[{cell_counter}] {cell_text}")
                 else:
                     results.append(f"[{cell_counter}] ")
