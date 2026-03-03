@@ -125,7 +125,7 @@ def read_docx_table_flat_index(file_path: str, table_index: int = -1) -> str:
         return f"Error reading table: {str(e)}"
 
 @mcp.tool()
-def safe_replace_docx_cell(file_path: str, table_index: int, cell_index: int, new_text: str, out_path: str = "") -> str:
+def safe_replace_docx_cell(file_path: str, table_index: int, cell_index: int, new_text: str, out_path: str = "", expected_old_text: str = "") -> str:
     """
     Replaces the text of a specific cell in a docx table safely preserving formatting.
     Uses the Flat Index algorithm to avoid the merged cell bug.
@@ -136,6 +136,7 @@ def safe_replace_docx_cell(file_path: str, table_index: int, cell_index: int, ne
         cell_index: The flat index of the unique cell to replace
         new_text: string input to insert into the cell
         out_path: Optional save path. If empty, overwrites the original file_path.
+        expected_old_text: Optional. If provided, the replacement will ONLY proceed if this text is found within the target cell's original text. This acts as a safety guard to prevent overwriting the wrong cell.
         
     Returns:
         Status message about the operation.
@@ -159,6 +160,10 @@ def safe_replace_docx_cell(file_path: str, table_index: int, cell_index: int, ne
             
         target_cell = cells[cell_index]
         old_text = target_cell.text.strip().replace('\n', ' ')
+        
+        # Verify safety guard if provided
+        if expected_old_text and expected_old_text not in target_cell.text:
+            return f"Safety Guard Error: Expected text '{expected_old_text}' not found in target cell. Actual text was '{old_text}'. Aborting operation."
         
         safe_replace_text_internal(target_cell, new_text)
         
@@ -215,6 +220,45 @@ def safe_replace_docx_text_keyword(file_path: str, old_text: str, new_text: str,
         return f"Successfully replaced '{old_text}' with '{new_text}' in {total_replacements} paragraph(s).\nSaved to: {out_path}"
     except Exception as e:
         return f"Error replacing text: {str(e)}"
+
+@mcp.tool()
+def safe_replace_docx_table_keyword(file_path: str, table_index: int, old_text: str, new_text: str, out_path: str = "") -> str:
+    """
+    Replaces all occurrences of old_text with new_text ONLY within a specific table,
+    preserving formatting as much as possible.
+    
+    Args:
+        file_path: The absolute path to the .docx file
+        table_index: Index of the target table
+        old_text: The exact string to search for
+        new_text: The string to replace it with
+        out_path: Optional save path. If empty, overwrites the original file_path.
+        
+    Returns:
+        Status message about the operation.
+    """
+    if not os.path.exists(file_path):
+        return f"Error: File '{file_path}' not found."
+        
+    if not out_path:
+        out_path = file_path
+        
+    try:
+        doc = Document(file_path)
+        if table_index < 0 or table_index >= len(doc.tables):
+            return f"Error: table_index {table_index} is out of bounds."
+            
+        target_table = doc.tables[table_index]
+        total_replacements = 0
+        
+        for row in target_table.rows:
+            for cell in row.cells:
+                total_replacements += replace_keyword_in_paragraphs(cell.paragraphs, old_text, new_text)
+                
+        doc.save(out_path)
+        return f"Successfully replaced '{old_text}' with '{new_text}' in {total_replacements} paragraph(s) of Table {table_index}.\nSaved to: {out_path}"
+    except Exception as e:
+        return f"Error replacing text in table: {str(e)}"
 
 @mcp.tool()
 def safe_replace_text_box_keyword(file_path: str, old_text: str, new_text: str, out_path: str = "") -> str:
