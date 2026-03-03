@@ -519,5 +519,96 @@ def read_docx_table_optimized(file_path: str, table_index: int = -1) -> str:
     except Exception as e:
         return f"Error parsing table optimized: {str(e)}"
 
+@mcp.tool()
+def copy_docx_table(file_path: str, table_index: int, out_path: str = "") -> str:
+    """
+    Copies a table and inserts the copy immediately after the original table.
+    """
+    if not os.path.exists(file_path):
+        return f"Error: File '{file_path}' not found."
+    if not out_path:
+        out_path = file_path
+    try:
+        doc = Document(file_path)
+        if table_index < 0 or table_index >= len(doc.tables):
+            return "Error: table_index out of bounds."
+        
+        target_table = doc.tables[table_index]
+        new_tbl = copy.deepcopy(target_table._element)
+        target_table._element.addnext(new_tbl)
+        
+        # Add a spacing paragraph between tables
+        p = OxmlElement('w:p')
+        target_table._element.addnext(p)
+        
+        doc.save(out_path)
+        return f"Successfully copied table {table_index}. Saved to: {out_path}"
+    except Exception as e:
+        return f"Error copying table: {str(e)}"
+
+@mcp.tool()
+def delete_docx_table(file_path: str, table_index: int, out_path: str = "") -> str:
+    """Deletes a table from the document."""
+    if not os.path.exists(file_path):
+        return f"Error: File '{file_path}' not found."
+    if not out_path:
+        out_path = file_path
+    try:
+        doc = Document(file_path)
+        if table_index < 0 or table_index >= len(doc.tables):
+            return "Error: table_index out of bounds."
+        
+        target_table = doc.tables[table_index]
+        target_table._element.getparent().remove(target_table._element)
+        
+        doc.save(out_path)
+        return f"Successfully deleted table {table_index}. Saved to: {out_path}"
+    except Exception as e:
+        return f"Error deleting table: {str(e)}"
+
+@mcp.tool()
+def add_docx_table_row(file_path: str, table_index: int, out_path: str = "") -> str:
+    """Appends a new row to the end of a table."""
+    if not os.path.exists(file_path):
+        return f"Error: File '{file_path}' not found."
+    if not out_path:
+        out_path = file_path
+    try:
+        doc = Document(file_path)
+        if table_index < 0 or table_index >= len(doc.tables):
+            return "Error: table_index out of bounds."
+        
+        target_table = doc.tables[table_index]
+        target_table.add_row()
+        
+        doc.save(out_path)
+        return f"Successfully added a row to table {table_index}. Saved to: {out_path}"
+    except Exception as e:
+        return f"Error adding row: {str(e)}"
+
+@mcp.tool()
+def delete_docx_table_row(file_path: str, table_index: int, row_index: int, out_path: str = "") -> str:
+    """Deletes a specific row from a table."""
+    if not os.path.exists(file_path):
+        return f"Error: File '{file_path}' not found."
+    if not out_path:
+        out_path = file_path
+    try:
+        doc = Document(file_path)
+        if table_index < 0 or table_index >= len(doc.tables):
+            return "Error: table_index out of bounds."
+            
+        target_table = doc.tables[table_index]
+        if row_index < 0 or row_index >= len(target_table.rows):
+            return "Error: row_index out of bounds."
+            
+        target_row = target_table.rows[row_index]
+        target_row._element.getparent().remove(target_row._element)
+        
+        doc.save(out_path)
+        return f"Successfully deleted row {row_index} from table {table_index}. Saved to: {out_path}"
+    except Exception as e:
+        return f"Error deleting row: {str(e)}"
+
 if __name__ == "__main__":
     mcp.run()
