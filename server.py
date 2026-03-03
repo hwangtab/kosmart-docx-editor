@@ -654,5 +654,61 @@ def delete_docx_table_row(file_path: str, table_index: int, row_index: int, out_
     except Exception as e:
         return f"Error deleting row: {str(e)}"
 
+@mcp.tool()
+def find_table_under_heading(file_path: str, target_heading: str) -> str:
+    """
+    Scans the document visually from top to bottom to find the given target_heading text,
+    and returns the table_index of the VERY FIRST table that appears immediately after it.
+    This avoids having to manually count tables.
+    
+    Args:
+        file_path: The absolute path to the .docx file
+        target_heading: The exact or partial text of the heading/paragraph to search for.
+        
+    Returns:
+        A string containing the found table_index and a preview of the table's contents.
+    """
+    from docx.oxml.table import CT_Tbl
+    from docx.oxml.text.paragraph import CT_P
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+    import os
+
+    if not os.path.exists(file_path):
+        return f"Error: File '{file_path}' not found."
+        
+    try:
+        doc = Document(file_path)
+        found_heading = False
+        table_index = 0
+        
+        for child in doc.element.body.iterchildren():
+            if isinstance(child, CT_P):
+                p = Paragraph(child, doc)
+                if target_heading in p.text:
+                    found_heading = True
+            elif isinstance(child, CT_Tbl):
+                if found_heading:
+                    table = Table(child, doc)
+                    preview = ""
+                    for i, row in enumerate(table.rows):
+                        if i > 2:
+                            preview += "  ...\n"
+                            break
+                        row_text = " | ".join(c.text.strip().replace('\n', ' ')[:30] for c in row.cells)
+                        preview += f"  Row {i}: {row_text}\n"
+                        
+                    return f"🌟 Success! Found target heading '{target_heading}'.\nThe FIRST table after this heading is [Table Index: {table_index}].\n\nPreview:\n{preview}"
+                
+                table_index += 1
+                
+        if not found_heading:
+            return f"Error: Could not find any paragraph containing the text '{target_heading}'."
+        else:
+            return f"Error: Found the heading '{target_heading}', but there were no tables after it in the document."
+            
+    except Exception as e:
+        return f"Error searching for table: {str(e)}"
+
 if __name__ == "__main__":
     mcp.run()
