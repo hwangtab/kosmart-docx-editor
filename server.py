@@ -20,6 +20,136 @@ def get_flat_cells(table):
                 seen.add(cell)
     return all_cells
 
+def get_flat_cells_with_position(table):
+    """
+    Returns unique cells with their (row_index, col_index) position.
+
+    Returns:
+        tuple: (all_cells, cell_to_position)
+            - all_cells: List of unique cell objects
+            - cell_to_position: Dict mapping cell_id to position info
+    """
+    all_cells = []
+    seen = set()
+    cell_to_position = {}
+
+    for row_idx, row in enumerate(table.rows):
+        for col_idx, cell in enumerate(row.cells):
+            cell_id = id(cell)
+            if cell_id not in seen:
+                all_cells.append(cell)
+                seen.add(cell_id)
+                cell_to_position[cell_id] = {
+                    "row_index": row_idx,
+                    "col_index": col_idx
+                }
+
+    return all_cells, cell_to_position
+
+def get_table_preview(table, rows=3, max_cell_len=50):
+    """
+    Generate a text preview of a table.
+
+    Args:
+        table: Table object
+        rows: Number of rows to preview
+        max_cell_len: Maximum characters per cell
+
+    Returns:
+        str: Formatted table preview
+    """
+    preview_lines = []
+    row_count = min(rows, len(table.rows))
+
+    for row_idx in range(row_count):
+        row = table.rows[row_idx]
+        cells_text = []
+        for cell in row.cells:
+            text = cell.text.strip().replace('\n', ' ')
+            if len(text) > max_cell_len:
+                text = text[:max_cell_len-3] + "..."
+            cells_text.append(text)
+        preview_lines.append(" | ".join(cells_text))
+
+    if len(table.rows) > rows:
+        preview_lines.append("...")
+
+    return "\n".join(preview_lines)
+
+def format_cell_text(text, max_len=50):
+    """Format cell text for display."""
+    text = text.strip().replace('\n', ' ')
+    if len(text) > max_len:
+        return text[:max_len-3] + "..."
+    return text
+
+def identify_table_location(doc, table_index):
+    """
+    Identify if a table is in header, footer, or body.
+
+    Returns:
+        str: "Header", "Footer", or "Body"
+    """
+    header_count = 0
+    footer_count = 0
+
+    for section in doc.sections:
+        header_count += len(section.header.tables)
+        footer_count += len(section.footer.tables)
+
+    if table_index < header_count:
+        return "Header"
+    elif table_index >= len(doc.tables) - footer_count:
+        return "Footer"
+    else:
+        return "Body"
+
+def get_actual_table_index(doc, tbl_element):
+    """
+    Maps XML table element to doc.tables index.
+
+    Args:
+        doc: Document object
+        tbl_element: CT_Tbl (XML table element)
+
+    Returns:
+        int: Index in doc.tables, or -1 if not found
+    """
+    for idx, table in enumerate(doc.tables):
+        if table._element is tbl_element:
+            return idx
+    return -1
+
+def validate_table_index(doc, table_index):
+    """
+    Validate table index and provide helpful error message.
+
+    Raises:
+        ValueError: If index is out of range
+    """
+    total_tables = len(doc.tables)
+
+    # 음수 인덱스 처리
+    if table_index < 0:
+        actual_index = total_tables + table_index
+        if actual_index < 0:
+            raise ValueError(
+                f"Table index {table_index} out of range. "
+                f"Document has {total_tables} tables. "
+                f"Use list_all_tables() to see available tables."
+            )
+        return actual_index
+
+    # 양수 인덱스 처리
+    if table_index >= total_tables:
+        raise ValueError(
+            f"Table index {table_index} out of range. "
+            f"Document has {total_tables} tables (indices 0-{total_tables-1}). "
+            f"Use list_all_tables() to see available tables."
+        )
+
+    return table_index
+
 def safe_replace_text_internal(cell, new_text):
     if not cell.paragraphs:
         cell.add_paragraph(new_text)
@@ -106,20 +236,28 @@ def read_docx_table_flat_index(file_path: str, table_index: int = -1) -> str:
     """
     if not os.path.exists(file_path):
         return f"Error: File '{file_path}' not found."
-    
+
     try:
         doc = Document(file_path)
         if not doc.tables:
             return "Error: No tables found in the document."
-            
+
+        # 테이블 인덱스 검증
+        try:
+            table_index = validate_table_index(doc, table_index)
+        except ValueError as e:
+            return f"Error: {str(e)}"
+
         target_table = doc.tables[table_index]
-        cells = get_flat_cells(target_table)
-        
+        # 개선된 함수 사용 - 위치 정보 포함
+        cells, positions = get_flat_cells_with_position(target_table)
+
         results = []
         for i, cell in enumerate(cells):
-            text = cell.text.strip().replace('\n', ' ')
-            results.append(f"[{i}] {text}")
-            
+            pos = positions[id(cell)]
+            text = cell.text.strip().replace('\n', ' ')[:100]  # 최대 100자
+            results.append(f"Cell {i} [Row {pos['row_index']}, Col {pos['col_index']}]: {text}")
+
         return "\n".join(results)
     except Exception as e:
         return f"Error reading table: {str(e)}"
@@ -631,29 +769,145 @@ def add_docx_table_row(file_path: str, table_index: int, out_path: str = "") -> 
         return f"Error adding row: {str(e)}"
 
 @mcp.tool()
+def insert_docx_table_row(file_path: str, table_index: int, row_index: int, row_data: list, out_path: str = "") -> str:
+    """
+    Inserts a new row with provided text data into a specific position of a table.
+    Safely clones the XML of the row above or below to preserve complex formatting and avoid merged cells bugs.
+    
+    Args:
+        file_path: The absolute path to the .docx file
+        table_index: Index of the target table.
+        row_index: The index where the new row should be inserted.
+        row_data: A list of strings corresponding to each cell's text in the new row.
+        out_path: Optional save path. If empty, overwrites the original file_path.
+        
+    Returns:
+        Status message about the operation.
+    """
+    if not os.path.exists(file_path):
+        return f"Error: File '{file_path}' not found."
+    if not out_path:
+        out_path = file_path
+
+    temp_path = file_path + ".insert_row.tmp.zip"
+
+    try:
+        NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        ns = {'w': NS}
+
+        with zipfile.ZipFile(file_path, 'r') as zin:
+            with zipfile.ZipFile(temp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    data = zin.read(item.filename)
+
+                    if item.filename == 'word/document.xml':
+                        root = ET.fromstring(data)
+                        all_tbl = root.findall('.//w:tbl', ns)
+                        if table_index < 0 or table_index >= len(all_tbl):
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                            return f"Error: table_index {table_index} out of bounds (total {len(all_tbl)} tables)."
+
+                        tbl = all_tbl[table_index]
+                        tbl_tag = f'{{{NS}}}tr'
+                        tr_list = [child for child in tbl if child.tag == tbl_tag]
+                        num_rows = len(tr_list)
+
+                        if row_index < 0 or row_index > num_rows:
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                            return f"Error: row_index {row_index} out of bounds (total {num_rows} rows)."
+
+                        clone_idx = row_index - 1 if row_index > 0 else 0
+                        ref_tr = tr_list[clone_idx]
+                        new_tr = copy.deepcopy(ref_tr)
+
+                        tc_tag = f'{{{NS}}}tc'
+                        tc_list = [child for child in new_tr if child.tag == tc_tag]
+
+                        for i, tc in enumerate(tc_list):
+                            text_to_set = row_data[i] if i < len(row_data) else ""
+                            all_t = tc.findall('.//w:t', ns)
+                            injected = False
+                            for t_elem in all_t:
+                                if not injected:
+                                    t_elem.text = text_to_set
+                                    injected = True
+                                else:
+                                    t_elem.text = ""
+
+                        tbl_children = list(tbl)
+                        if row_index < num_rows:
+                            anchor_tr = tr_list[row_index]
+                            anchor_pos = tbl_children.index(anchor_tr)
+                            tbl.insert(anchor_pos, new_tr)
+                        else:
+                            tbl.append(new_tr)
+
+                        data = ET.tostring(root, encoding='UTF-8', xml_declaration=True)
+
+                    zout.writestr(item, data)
+
+        shutil.move(temp_path, out_path)
+        return f"Successfully inserted a row into table {table_index} at index {row_index} with data: {row_data}. Saved to: {out_path}"
+
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return f"Error inserting row: {str(e)}"
+
+
+@mcp.tool()
 def delete_docx_table_row(file_path: str, table_index: int, row_index: int, out_path: str = "") -> str:
     """Deletes a specific row from a table."""
     if not os.path.exists(file_path):
         return f"Error: File '{file_path}' not found."
     if not out_path:
         out_path = file_path
-    try:
-        doc = Document(file_path)
-        if table_index < 0 or table_index >= len(doc.tables):
-            return "Error: table_index out of bounds."
-            
-        target_table = doc.tables[table_index]
-        if row_index < 0 or row_index >= len(target_table.rows):
-            return "Error: row_index out of bounds."
-            
-        target_row = target_table.rows[row_index]
-        target_row._element.getparent().remove(target_row._element)
-        
-        doc.save(out_path)
-        return f"Successfully deleted row {row_index} from table {table_index}. Saved to: {out_path}"
-    except Exception as e:
-        return f"Error deleting row: {str(e)}"
 
+    temp_path = file_path + ".delete_row.tmp.zip"
+
+    try:
+        NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+        ns = {'w': NS}
+
+        with zipfile.ZipFile(file_path, 'r') as zin:
+            with zipfile.ZipFile(temp_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+                for item in zin.infolist():
+                    data = zin.read(item.filename)
+
+                    if item.filename == 'word/document.xml':
+                        root = ET.fromstring(data)
+                        all_tbl = root.findall('.//w:tbl', ns)
+                        if table_index < 0 or table_index >= len(all_tbl):
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                            return f"Error: table_index {table_index} out of bounds (total {len(all_tbl)} tables)."
+
+                        tbl = all_tbl[table_index]
+                        tbl_tag = f'{{{NS}}}tr'
+                        tr_list = [child for child in tbl if child.tag == tbl_tag]
+                        num_rows = len(tr_list)
+
+                        if row_index < 0 or row_index >= num_rows:
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                            return f"Error: row_index {row_index} out of bounds (total {num_rows} rows)."
+
+                        target_tr = tr_list[row_index]
+                        tbl.remove(target_tr)
+
+                        data = ET.tostring(root, encoding='UTF-8', xml_declaration=True)
+
+                    zout.writestr(item, data)
+
+        shutil.move(temp_path, out_path)
+        return f"Successfully deleted row {row_index} from table {table_index}. Saved to: {out_path}"
+
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return f"Error deleting row: {str(e)}"
 @mcp.tool()
 def find_table_under_heading(file_path: str, target_heading: str) -> str:
     """
@@ -680,8 +934,7 @@ def find_table_under_heading(file_path: str, target_heading: str) -> str:
     try:
         doc = Document(file_path)
         found_heading = False
-        table_index = 0
-        
+
         for child in doc.element.body.iterchildren():
             if isinstance(child, CT_P):
                 p = Paragraph(child, doc)
@@ -689,26 +942,152 @@ def find_table_under_heading(file_path: str, target_heading: str) -> str:
                     found_heading = True
             elif isinstance(child, CT_Tbl):
                 if found_heading:
-                    table = Table(child, doc)
-                    preview = ""
-                    for i, row in enumerate(table.rows):
-                        if i > 2:
-                            preview += "  ...\n"
-                            break
-                        row_text = " | ".join(c.text.strip().replace('\n', ' ')[:30] for c in row.cells)
-                        preview += f"  Row {i}: {row_text}\n"
-                        
-                    return f"🌟 Success! Found target heading '{target_heading}'.\nThe FIRST table after this heading is [Table Index: {table_index}].\n\nPreview:\n{preview}"
-                
-                table_index += 1
-                
+                    # ✅ 핵심: XML 요소를 실제 doc.tables 인덱스로 변환
+                    actual_index = get_actual_table_index(doc, child)
+
+                    if actual_index == -1:
+                        return f"Error: Could not map table to doc.tables index"
+
+                    # 미리보기 제공
+                    table = doc.tables[actual_index]
+                    preview = get_table_preview(table, rows=3)
+
+                    return f"🌟 Success! Found target heading '{target_heading}'.\nThe FIRST table after this heading is [Table Index: {actual_index}].\n\nPreview:\n{preview}"
+
         if not found_heading:
             return f"Error: Could not find any paragraph containing the text '{target_heading}'."
         else:
             return f"Error: Found the heading '{target_heading}', but there were no tables after it in the document."
-            
+
     except Exception as e:
         return f"Error searching for table: {str(e)}"
+
+@mcp.tool()
+def list_all_tables(file_path: str) -> str:
+    """
+    Lists all tables in the document with their properties.
+
+    Args:
+        file_path: The absolute path to the .docx file
+
+    Returns:
+        A formatted string listing:
+        - Table index (doc.tables 기준)
+        - Location (본문/헤더/바닥글)
+        - 행/열 수
+        - 첫 3줄 미리보기
+    """
+    try:
+        doc = Document(file_path)
+        total_tables = len(doc.tables)
+
+        if total_tables == 0:
+            return "Document has no tables."
+
+        # 헤더/바닥글 테이블 카운팅
+        header_footer_count = 0
+        for section in doc.sections:
+            header_footer_count += len(section.header.tables)
+            header_footer_count += len(section.footer.tables)
+
+        results = []
+        results.append(f"Document has {total_tables} tables:\n")
+
+        for idx, table in enumerate(doc.tables):
+            rows_count = len(table.rows)
+            cols_count = len(table.columns) if table.columns else 0
+
+            # 위치 판정
+            location = identify_table_location(doc, idx)
+
+            # 첫 3줄 미리보기
+            preview = get_table_preview(table, rows=3)
+
+            results.append(f"Table {idx} [{location}] ({rows_count} rows × {cols_count} cols)")
+            if preview:
+                # 미리보기를 들여쓰기
+                preview_lines = preview.split('\n')
+                for line in preview_lines:
+                    results.append(f"  {line}")
+            results.append("")  # 빈 줄 추가
+
+        return "\n".join(results)
+
+    except FileNotFoundError:
+        return f"Error: File not found at {file_path}"
+    except Exception as e:
+        return f"Error listing tables: {str(e)}"
+
+@mcp.tool()
+def search_table_by_content(file_path: str, search_text: str, match_mode: str = "partial") -> str:
+    """
+    Searches for a table containing the specified text.
+
+    Args:
+        file_path: The absolute path to the .docx file
+        search_text: Text to find
+        match_mode: "partial" (포함) or "exact" (정확히)
+
+    Returns:
+        A formatted string with:
+        - Table index
+        - Cell location (row, col)
+        - Cell content
+        - Table preview
+    """
+    try:
+        doc = Document(file_path)
+        results = []
+        found_count = 0
+
+        for table_idx, table in enumerate(doc.tables):
+            matches_in_table = []
+
+            for row_idx, row in enumerate(table.rows):
+                for col_idx, cell in enumerate(row.cells):
+                    cell_text = cell.text.strip()
+
+                    if match_mode == "partial":
+                        if search_text in cell_text:
+                            matches_in_table.append({
+                                "row": row_idx,
+                                "col": col_idx,
+                                "content": format_cell_text(cell_text, 100)
+                            })
+                    elif match_mode == "exact":
+                        if cell_text == search_text:
+                            matches_in_table.append({
+                                "row": row_idx,
+                                "col": col_idx,
+                                "content": format_cell_text(cell_text, 100)
+                            })
+
+            if matches_in_table:
+                found_count += 1
+                location = identify_table_location(doc, table_idx)
+                results.append(f"\nTable {table_idx} [{location}]:")
+
+                for match in matches_in_table:
+                    results.append(f"  - Cell (Row {match['row']}, Col {match['col']}): \"{match['content']}\"")
+
+                # 미리보기 추가
+                preview = get_table_preview(table, rows=3)
+                results.append("  Preview:")
+                if preview:
+                    preview_lines = preview.split('\n')
+                    for line in preview_lines:
+                        results.append(f"    {line}")
+
+        if found_count == 0:
+            return f"No tables found containing \"{search_text}\" (mode: {match_mode})"
+
+        summary = f"Found {found_count} table(s) matching \"{search_text}\" (mode: {match_mode}):"
+        return summary + "\n" + "\n".join(results)
+
+    except FileNotFoundError:
+        return f"Error: File not found at {file_path}"
+    except Exception as e:
+        return f"Error searching tables: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()
